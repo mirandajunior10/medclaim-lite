@@ -56,7 +56,7 @@ CREATE TABLE IF NOT EXISTS contracts (
 );
 
 -- claims.is_deleted is TRI-STATE by history (see ADR-002):
---   1     -> voided through the modern path, hidden from statements
+--   1     -> voided (either void path), hidden from statements
 --   0     -> explicitly active
 --   NULL  -> era-1 rows that predate the flag (must still be shown)
 CREATE TABLE IF NOT EXISTS claims (
@@ -77,8 +77,8 @@ CREATE TABLE IF NOT EXISTS remittances (
     posted_date  TEXT NOT NULL
 );
 
--- Voids are recorded here regardless of which void path ran. The legacy path
--- writes ONLY here; the modern path also flips claims.is_deleted.
+-- Voids are recorded here regardless of which void path ran. Both paths also
+-- flip claims.is_deleted (T-103: the legacy path used to write ONLY here).
 CREATE TABLE IF NOT EXISTS void_log (
     claim_id   TEXT NOT NULL,
     reason     TEXT,
