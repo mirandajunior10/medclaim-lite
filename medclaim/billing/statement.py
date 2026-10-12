@@ -38,7 +38,7 @@ def build_statement(patient_id):
 
         # ------------------------------------------------------------ claims
         # is_deleted is not 1  ->  show active (0) and legacy (NULL), hide the
-        # modern-voided (1). see ADR-002.
+        # voided (1, set by both void paths since T-103). see ADR-002.
         claim_rows = conn.execute(
             "select id, patient_id, payer_id, service_date, amount_cents, "
             "adjustment_cents, status, is_deleted "
