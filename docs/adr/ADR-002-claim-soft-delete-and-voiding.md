@@ -31,3 +31,13 @@ and 0 rows are both shown and only explicitly-voided rows are hidden.
 Correctly voided claims disappear from statements. The correctness of this
 depends on the void path actually setting the flag — see the void code in
 `medclaim/claims/`.
+
+## Amendment (T-103)
+
+The legacy path (`claims.void_claim_legacy`) predated the flag and wrote only
+`void_log`, so its voids stayed on statements. Both paths now go through one
+helper that sets `is_deleted = 1` and writes `void_log` in the same
+transaction. Claims voided the legacy way before the fix are repaired by
+`claims.backfill_legacy_voids()` (`make backfill-voids`), which flags every
+claim listed in `void_log`; it is idempotent. The legacy audit line no longer
+logs patient name or MRN.
