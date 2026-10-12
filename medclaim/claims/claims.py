@@ -35,40 +35,60 @@ def void_claim(claim_id, reason=None):
     # This is the one new code should call.
     conn = db.connect()
     try:
-        conn.execute("update claims set is_deleted = 1 where id = ?", (claim_id,))
-        conn.execute(
-            "insert into void_log (claim_id, reason, method, voided_at) "
-            "values (?, ?, 'modern', ?)",
-            (claim_id, reason, datetime.utcnow().isoformat(timespec="seconds")),
-        )
+        _record_void(conn, claim_id, reason, "modern")
         conn.commit()
     finally:
         conn.close()
 
 
+def _record_void(conn, claim_id, reason, method):
+    # T-103: the single place a void is written. Every void path must hide the
+    # claim (is_deleted = 1, ADR-002) AND audit it in void_log, in the same
+    # transaction. `method` keeps the audit trail of which path ran.
+    conn.execute("update claims set is_deleted = 1 where id = ?", (claim_id,))
+    conn.execute(
+        "insert into void_log (claim_id, reason, method, voided_at) "
+        "values (?, ?, ?, ?)",
+        (claim_id, reason, method,
+         datetime.utcnow().isoformat(timespec="seconds")),
+    )
+
+
 def void_claim_legacy(claim_id, reason=None):
-    # ORIGINAL void path (2018). Predates the is_deleted column, so it records the
-    # void in void_log and nowhere else. Still called from the old ERA-import and
-    # correction flows.
+    # ORIGINAL void path (2018). Still called from the old ERA-import and
+    # correction flows. It predates the is_deleted column and used to write
+    # void_log ONLY, so its voids stayed visible on statements (T-103). It now
+    # goes through _record_void like the modern path.
     conn = db.connect()
     try:
-        # pull the patient for the audit line
+        # T-103: the audit line no longer carries patient name / MRN; those must
+        # never reach logs (docs/domain-primer.md). Claim id + patient id are
+        # enough to trace it.
         row = conn.execute(
-            "select p.name, p.mrn, c.patient_id "
-            "from claims c join patients p on p.patient_id = c.patient_id "
-            "where c.id = ?",
-            (claim_id,),
+            "select patient_id from claims where id = ?", (claim_id,)
         ).fetchone()
         if row is not None:
-            pat_id = row["patient_id"]   # era-1 called it pat_id here
-            # old audit logging. writes the patient name and MRN into the log.
-            log.info("legacy void: claim=%s pat=%s patient=%s mrn=%s reason=%s",
-                     claim_id, pat_id, row["name"], row["mrn"], reason)
-        conn.execute(
-            "insert into void_log (claim_id, reason, method, voided_at) "
-            "values (?, ?, 'legacy', ?)",
-            (claim_id, reason, datetime.utcnow().isoformat(timespec="seconds")),
+            log.info("legacy void: claim=%s pat=%s reason=%s",
+                     claim_id, row["patient_id"], reason)
+        _record_void(conn, claim_id, reason, "legacy")
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def backfill_legacy_voids():
+    # T-103 data repair. Claims voided through the legacy path BEFORE the fix
+    # have a void_log row but is_deleted still NULL/0, so they keep showing on
+    # statements. void_log is the record of truth for voids (ADR-002); flag
+    # every claim it lists. Idempotent: safe to re-run. Returns rows fixed.
+    conn = db.connect()
+    try:
+        cur = conn.execute(
+            "update claims set is_deleted = 1 "
+            "where is_deleted is not 1 "
+            "and id in (select claim_id from void_log)"
         )
         conn.commit()
+        return cur.rowcount
     finally:
         conn.close()
